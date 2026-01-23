@@ -1,6 +1,5 @@
 namespace Pryaniator;
 
-public class Signal
+public abstract class Signal
 {
-    
 }
