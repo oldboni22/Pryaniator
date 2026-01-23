@@ -14,7 +14,6 @@ internal static class MediatorBuilder
     
     public static FrozenDictionary<Type, Func<IServiceProvider, Signal, Task<object?>>> CreateDictionary(params Assembly[] assemblies)
     {
-        var signals = GetValidSignalTypes(assemblies).ToList();
         var handlers = GetValidHandlerTypes(assemblies).ToList();
 
         var result = new ConcurrentDictionary<Type, Func<IServiceProvider, Signal, Task<object?>>>();
@@ -94,16 +93,6 @@ internal static class MediatorBuilder
     #endregion
     
     #region Assemlies scan
-
-    private static IEnumerable<Type> GetValidSignalTypes(Assembly[] assemblies)
-    {
-        return assemblies
-            .AsParallel()
-            .SelectMany(a => a
-                .GetTypes()
-                .Where(t => t is { IsAbstract: false, IsInterface: false})
-                .Where(t => t.BaseType == typeof(Signal)));
-    }
 
     private static IEnumerable<Type> GetValidHandlerTypes(Assembly[] assemblies)
     {
