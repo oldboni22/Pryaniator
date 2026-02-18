@@ -2,5 +2,6 @@ namespace Pryaniator;
 
 public interface IMediator
 {
-    Task<object?> SendAsync<TSignal>(TSignal signal) where TSignal : Signal;
+    Task<IEnumerable<object?>> SendAsync<TSignal>(TSignal signal, CancellationToken cancellationToken = default)
+        where TSignal : Signal;
 }

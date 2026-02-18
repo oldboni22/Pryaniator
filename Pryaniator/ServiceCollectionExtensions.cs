@@ -9,10 +9,10 @@ public static class ServiceCollectionExtensions
     {
         public IServiceCollection AddPryaniator(params Assembly[] assemblies)
         {
-            Mediator.Handlers = MediatorBuilder.CreateDictionary(assemblies);
 
             return services
-                .AddScoped<IMediator>(sp => new Mediator(sp));
+                .AddSingleton(MediatorBuilder.CreateDictionary(assemblies))
+                .AddScoped<IMediator, Mediator>();
         }
     }
 }

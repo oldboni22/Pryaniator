@@ -2,16 +2,25 @@ using System.Collections.Frozen;
 
 namespace Pryaniator;
 
-public sealed class Mediator(IServiceProvider sp) : IMediator
+
+public sealed class Mediator(
+    IServiceProvider sp, 
+    FrozenDictionary<Type, IEnumerable<Func<IServiceProvider, Signal, CancellationToken, Task<object?>>>> handlers) : IMediator
 {
-    internal static FrozenDictionary<Type, Func<IServiceProvider, Signal, Task<object?>>> Handlers 
-    { 
-        private get;
-        set => field ??= value;
-    }
-    
-    public Task<object?> SendAsync<TSignal>(TSignal signal) where TSignal : Signal
+    public async Task<IEnumerable<object?>> SendAsync<TSignal>(TSignal signal, CancellationToken cancellationToken = default) 
+        where TSignal : Signal
     {
-        return Handlers[typeof(TSignal)](sp, signal);
+        var signalHandlers = handlers[typeof(TSignal)].ToList();
+        
+        var results = new List<object?>(signalHandlers.Count);
+
+        foreach (var handler in signalHandlers)
+        {
+            var handlerResult = await handler(sp, signal, cancellationToken);
+                
+            results.Add(handlerResult);
+        }
+        
+        return results;
     }
 }

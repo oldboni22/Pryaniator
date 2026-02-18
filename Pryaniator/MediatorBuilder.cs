@@ -12,42 +12,42 @@ internal static class MediatorBuilder
     
     private static readonly Type ValueReturnDefinition = typeof(ISignalHandler<,>).GetGenericTypeDefinition();
     
-    public static FrozenDictionary<Type, Func<IServiceProvider, Signal, Task<object?>>> CreateDictionary(params Assembly[] assemblies)
+    public static FrozenDictionary<Type, IEnumerable<Func<IServiceProvider, Signal, CancellationToken, Task<object?>>>> CreateDictionary(params Assembly[] assemblies)
     {
         var handlers = GetValidHandlerTypes(assemblies).ToList();
 
-        var result = new ConcurrentDictionary<Type, Func<IServiceProvider, Signal, Task<object?>>>();
-
-        Parallel.ForEach(handlers, hType =>
+        var registry = handlers
+            .SelectMany(hType => hType.GetInterfaces(), (hType, iType) => new { hType, iType })
+            .Where(x => x.iType.IsGenericType)
+            .Select(x => new
+            {
+                x.hType,
+                x.iType,
+                Def = x.iType.GetGenericTypeDefinition(),
+                Args = x.iType.GetGenericArguments()
+            })
+            .Where(x => x.Def == ValueReturnDefinition || x.Def == NullReturnDefinition)
+            .Select(x => new
+            {
+                SignalType = x.Args[0],
+                ResultType = x.Args.Length > 1 ? x.Args[1] : null,
+                HandlerType = x.hType,
+                InterfaceType = x.iType
+            })
+            .GroupBy(x => x.SignalType);
+        
+        var result = new ConcurrentDictionary<Type, IEnumerable<Func<IServiceProvider, Signal, CancellationToken, Task<object?>>>>();
+        
+        Parallel.ForEach(registry, group =>
         {
-            try
+            var invokers = new ConcurrentBag<Func<IServiceProvider, Signal, CancellationToken, Task<object?>>>();
+    
+            foreach (var entry in group)
             {
-                var handlerInterface = hType
-                    .GetInterfaces()
-                    .Single(i =>
-                    {
-                        if (!i.IsGenericType)
-                        {
-                            return false;
-                        }
-
-                        var genericTypeDefinition = i.GetGenericTypeDefinition();
-                        return
-                            genericTypeDefinition == ValueReturnDefinition ||
-                            genericTypeDefinition == NullReturnDefinition;
-                    });
-                
-                var genericArgs = handlerInterface.GetGenericArguments();
-
-                var signalType = genericArgs[0];
-                var resultType = genericArgs.Length > 1 ? genericArgs[1] : null;
-
-                result.TryAdd(signalType, GenerateExpressionInvoker(hType, handlerInterface, signalType, resultType));
+                invokers.Add(GenerateExpressionInvoker(entry.HandlerType, entry.InterfaceType, entry.SignalType, entry.ResultType));
             }
-            catch (InvalidOperationException e)
-            {
-                throw new Exception(ExceptionMessages.GetMultipleHandlersMessage(hType), e);
-            }
+    
+            result[group.Key] = invokers;
         });
 
         return result.ToFrozenDictionary();
@@ -55,11 +55,12 @@ internal static class MediatorBuilder
 
     #region Invocation generation
 
-    private static Func<IServiceProvider, Signal, Task<object?>> GenerateExpressionInvoker(
+    private static Func<IServiceProvider, Signal, CancellationToken, Task<object?>> GenerateExpressionInvoker(
         Type handlerType, Type handlerInterface, Type signalType, Type? resultType)
     {
         var handlerFactory = ActivatorUtilities.CreateFactory(handlerType, []);
         
+        var ctParam = Expression.Parameter(typeof(CancellationToken), "ct");
         var spParam = Expression.Parameter(typeof(IServiceProvider), "sp");
         var signalParam = Expression.Parameter(typeof(Signal), "signal");
         
@@ -68,9 +69,9 @@ internal static class MediatorBuilder
         
         var resolvedHandler = Expression.Convert(createHandlerInvoker, handlerType);
         
-        var handleMethod = handlerInterface.GetMethod("Handle", [signalType]);
+        var handleMethod = handlerInterface.GetMethod("Handle", [signalType, typeof(CancellationToken)]);
         var convertedSignal = Expression.Convert(signalParam, signalType);
-        var callHandle = Expression.Call(resolvedHandler, handleMethod!, convertedSignal);
+        var callHandle = Expression.Call(resolvedHandler, handleMethod!, convertedSignal, ctParam);
 
         Expression finalBody;
 
@@ -87,7 +88,8 @@ internal static class MediatorBuilder
             finalBody = Expression.Call(wrapMethod, callHandle, resolvedHandler);
         }
         
-        return Expression.Lambda<Func<IServiceProvider, Signal, Task<object?>>>(finalBody, spParam, signalParam).Compile();
+        return Expression.Lambda<Func<IServiceProvider, Signal, CancellationToken, Task<object?>>>(
+            finalBody, spParam, signalParam, ctParam).Compile();
     }
     
     #endregion
@@ -121,7 +123,7 @@ internal static class MediatorBuilder
                     genericTypeDefinition == ValueReturnDefinition || genericTypeDefinition == NullReturnDefinition;
             });
     }
-
+    
     #endregion
 }
 
